@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Farming Game Simulation</title>
+    <style>
+        table { border-collapse: collapse; width: 100%; }
+        th, td { border: 1px solid black; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+    </style>
+</head>
+<body>
+    <h1>Farming Game Simulation</h1>
+    <button id="startCompetition">Start Competition</button>
+    <div id="results">
+        <table>
+            <thead>
+                <tr>
+                    <th>Day</th>
+                    <th>Decision</th>
+                    <th>Money</th>
+                    <th>Energy</th>
+                    <th>Crops</th>
+                </tr>
+            </thead>
+            <tbody id="resultsBody"></tbody>
+        </table>
+    </div>
+
+    <script>
+        document.getElementById('startCompetition').addEventListener('click', function() {
+            const resultsBody = document.getElementById('resultsBody');
+            resultsBody.innerHTML = '';
+            console.log('Starting competition...');
+            
+            const eventSource = new EventSource('/stream-competition');
+            console.log('EventSource created');
+            
+            eventSource.onopen = function(event) {
+                console.log('EventSource connection opened');
+            };
+            
+            eventSource.onmessage = function(event) {
+                console.log('Received data:', event.data);
+                const state = JSON.parse(event.data);
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${state.day}</td>
+                    <td>${state.decision}</td>
+                    <td>${state.money}</td>
+                    <td>${state.energy}</td>
+                    <td>${JSON.stringify(state.crops)}</td>
+                `;
+                resultsBody.appendChild(row);
+                if (state.day === 'Final') {
+                    eventSource.close();
+                    console.log('Competition finished');
+                }
+            };
+            
+            eventSource.onerror = function(error) {
+                console.error('EventSource failed:', error);
+                eventSource.close();
+            };
+        });
+    </script>
+</body>
+</html>
