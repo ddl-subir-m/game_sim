@@ -1,7 +1,7 @@
 import re
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
 import autogen
 import asyncio
@@ -14,6 +14,9 @@ import os
 
 import json
 from sse_starlette.sse import EventSourceResponse
+
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
 # Load environment variables
 load_dotenv()
@@ -29,13 +32,23 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Update this line to serve static files from a 'static' directory
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+@app.get("/", response_class=HTMLResponse)
+async def read_root():
+    with open("static/index.html", "r") as f:
+        return f.read()
+
 # Configure AutoGen for two different models
 openai_api_key = os.getenv("OPENAI_API_KEY")
-# config_list_gpt4 = [{"model": "gpt-4o-mini", "api_key": openai_api_key}]
-config_list_gpt4 = [{"model": "gpt-3.5-turbo", "api_key": openai_api_key}]
+config_list_gpt4 = [{"model": "gpt-4o-mini", "api_key": openai_api_key}]
+# config_list_gpt4 = [{"model": "gpt-3.5-turbo", "api_key": openai_api_key}]
 config_list_gpt35 = [{"model": "gpt-3.5-turbo", "api_key": openai_api_key}]
 
 competition_results = None
+competition_running = False
+simulation_task = None
 
 @dataclass
 class GameState:
@@ -215,57 +228,96 @@ Failure to follow this format exactly will result in a default "Maintenance" act
     # If no valid decision format is found, default to waiting
     return "3 Maintenance"
 
-@app.post("/compete", response_model=CompetitionResult)
-async def compete():
-    global competition_results
-    competition_results = await run_competition()
-    return competition_results
-
 @app.get("/stream-competition")
 async def stream_competition(request: Request):
+    global competition_running
+    if competition_running:
+        return JSONResponse(content={"error": "Competition already running"}, status_code=400)
+    
+    competition_running = True
+
     async def event_generator():
-        async for state in run_competition():
-            yield f"data: {json.dumps(state)}\n\n"
+        try:
+            async for state in run_competition():
+                if await request.is_disconnected():
+                    break
+                yield f"data: {json.dumps(state)}\n\n"
+                await asyncio.sleep(0.1)  # Small delay to allow for interruption
+        finally:
+            global competition_running
+            competition_running = False
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
+@app.post("/stop-competition")
+async def stop_competition():
+    global competition_running, simulation_task
+    if competition_running:
+        competition_running = False
+        if simulation_task:
+            await simulation_task
+            simulation_task = None
+    return JSONResponse(content={"message": "Competition stopped"})
+
 async def run_competition():
+    global simulation_task
+    simulation_task = asyncio.current_task()
     gpt4_state = GameState(money=1000, energy=100, crops=[], day=1)
+    gpt35_state = GameState(money=1000, energy=100, crops=[], day=1)
     gpt4_log = []
+    gpt35_log = []
 
     for current_day in range(1, GAME_RULES["total_days"] + 1):
+        if not competition_running:
+            break
+        
         days_left = GAME_RULES["total_days"] - current_day + 1
         
-        gpt4_decision = await make_decision(assistant_gpt4, gpt4_state, days_left)
+        # Run decisions for both models concurrently
+        gpt35_decision, gpt4_decision = await asyncio.gather(
+            make_decision(assistant_gpt35, gpt35_state, days_left),
+            make_decision(assistant_gpt4, gpt4_state, days_left)
+        )
 
+        update_state(gpt35_state, gpt35_decision, gpt35_log)
         update_state(gpt4_state, gpt4_decision, gpt4_log)
 
         yield {
-            "day": current_day,
-            "decision": gpt4_decision,
-            "money": gpt4_state.money,
-            "energy": gpt4_state.energy,
-            "crops": [{"type": crop["type"], "planted_at": crop["planted_at"]} for crop in gpt4_state.crops]
+            "gpt35": {
+                "day": current_day,
+                "decision": gpt35_decision,
+                "money": gpt35_state.money,
+                "energy": gpt35_state.energy,
+                "crops": [{"type": crop["type"], "planted_at": crop["planted_at"]} for crop in gpt35_state.crops]
+            },
+            "gpt4": {
+                "day": current_day,
+                "decision": gpt4_decision,
+                "money": gpt4_state.money,
+                "energy": gpt4_state.energy,
+                "crops": [{"type": crop["type"], "planted_at": crop["planted_at"]} for crop in gpt4_state.crops]
+            }
         }
 
-        await asyncio.sleep(10)  # 10 seconds per day
+        await asyncio.sleep(0.1)  # Small delay to prevent blocking
 
-    yield {
-        "day": "Final",
-        "decision": "Competition finished",
-        "money": gpt4_state.money,
-        "energy": gpt4_state.energy,
-        "crops": [{"type": crop["type"], "planted_at": crop["planted_at"]} for crop in gpt4_state.crops]
-    }
-
-# Add this route to serve the HTML file
-from fastapi.responses import HTMLResponse
-
-
-@app.get("/", response_class=HTMLResponse)
-async def read_root():
-    with open("index.html", "r") as f:
-        return f.read()
+    if competition_running:
+        yield {
+            "gpt35": {
+                "day": "Final",
+                "decision": "Competition finished",
+                "money": gpt35_state.money,
+                "energy": gpt35_state.energy,
+                "crops": [{"type": crop["type"], "planted_at": crop["planted_at"]} for crop in gpt35_state.crops]
+            },
+            "gpt4": {
+                "day": "Final",
+                "decision": "Competition finished",
+                "money": gpt4_state.money,
+                "energy": gpt4_state.energy,
+                "crops": [{"type": crop["type"], "planted_at": crop["planted_at"]} for crop in gpt4_state.crops]
+            }
+        }
 
 if __name__ == "__main__":
     import sys

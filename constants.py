@@ -1,6 +1,6 @@
 # Game Rules and Constants
 GAME_RULES = {
-    "total_days": 30,
+    "total_days": 50,
     "starting_money": 100,
     "max_energy": 100,
     "energy_regen_per_day": 20,
