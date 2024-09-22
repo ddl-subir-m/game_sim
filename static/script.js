@@ -45,6 +45,22 @@ function initCharts() {
         options: { responsive: true, title: { display: true, text: 'Energy Over Time' } }
     });
 
+    const actionAbbreviations = {
+        'Plant': 'PL',
+        'Harvest': 'HV',
+        'Maintenance': 'MT',
+        'Sell': 'SL',
+        'Buy': 'BY',
+        'Sabotage': 'SB'
+    };
+
+    const abbreviationArray = Object.values(actionAbbreviations);
+
+    // Reverse mapping for tooltips
+    const abbreviationToAction = Object.fromEntries(
+        Object.entries(actionAbbreviations).map(([key, value]) => [value, key])
+    );
+
     actionChart = new Chart(ctx3, {
         type: 'scatter',
         data: {
@@ -62,8 +78,12 @@ function initCharts() {
                 x: { type: 'linear', position: 'bottom', title: { display: true, text: 'Day' } },
                 y: { 
                     type: 'category', 
-                    labels: ['Plant', 'Harvest', 'Maintenance'],
-                    title: { display: true, text: 'Action' }
+                    labels: abbreviationArray,
+                    ticks: {
+                        callback: function(value, index) {
+                            return abbreviationArray[index];
+                        }
+                    }
                 }
             },
             plugins: {
@@ -71,12 +91,19 @@ function initCharts() {
                     callbacks: {
                         label: function(context) {
                             return `Day ${context.parsed.x}: ${context.raw.action}`;
+                        },
+                        title: function(tooltipItems) {
+                            const abbreviation = tooltipItems[0].raw.y;
+                            return `${abbreviation} - ${abbreviationToAction[abbreviation]}`;
                         }
                     }
                 }
             }
         }
     });
+
+    // Store the actionAbbreviations in the chart for later use
+    actionChart.actionAbbreviations = actionAbbreviations;
 }
 
 function updateFarmGrid(farm, crops, lastAction) {
@@ -133,13 +160,29 @@ function updateActionChart(day, gpt35Action, gpt4Action) {
     const gpt35ActionType = gpt35Action.split(' ')[1];
     const gpt4ActionType = gpt4Action.split(' ')[1];
 
-    console.log('Action types:', gpt35ActionType, gpt4ActionType);
+    // Function to get the abbreviation of the action type
+    const getActionAbbreviation = (actionType) => actionChart.actionAbbreviations[actionType] || '';
 
-    actionChart.data.datasets[0].data.push({ x: day, y: gpt35ActionType, action: gpt35Action });
-    actionChart.data.datasets[1].data.push({ x: day, y: gpt4ActionType, action: gpt4Action });
+    // Only add data points if the action is not "finished"
+    if (gpt35ActionType !== 'finished') {
+        actionChart.data.datasets[0].data.push({ 
+            x: day, 
+            y: getActionAbbreviation(gpt35ActionType), 
+            action: gpt35Action,
+            id: `gpt35-${day}`
+        });
+        actionChart.data.datasets[0].pointStyle.push(cropEmojis[gpt35ActionType] || '❓');
+    }
 
-    actionChart.data.datasets[0].pointStyle.push(cropEmojis[gpt35ActionType] || '❓');
-    actionChart.data.datasets[1].pointStyle.push(cropEmojis[gpt4ActionType] || '❓');
+    if (gpt4ActionType !== 'finished') {
+        actionChart.data.datasets[1].data.push({ 
+            x: day, 
+            y: getActionAbbreviation(gpt4ActionType), 
+            action: gpt4Action,
+            id: `gpt4-${day}`
+        });
+        actionChart.data.datasets[1].pointStyle.push(cropEmojis[gpt4ActionType] || '❓');
+    }
 
     console.log('Chart data:', actionChart.data);
 

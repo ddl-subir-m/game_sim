@@ -201,3 +201,9 @@ button {
     height: 300px; 
     width: 100%;
 }
+
+.chart-container {
+    width: 100%;
+    max-width: 800px; /* Adjust this value as needed */
+    margin: 0 auto;
+}
